@@ -6,7 +6,7 @@ import GoogleSignIn
 
 // MARK: - FCViewController
 
-class FCViewController: UIViewController, UINavigationControllerDelegate {
+class FCViewController: UIViewController, UINavigationControllerDelegate{
     
     // MARK: Properties
     
@@ -86,7 +86,7 @@ class FCViewController: UIViewController, UINavigationControllerDelegate {
     }
     
     func configureStorage() {
-        // TODO: configure storage using your firebase storage
+        storageRef = Storage.storage().reference()
     }
     
     deinit {
@@ -123,6 +123,7 @@ class FCViewController: UIViewController, UINavigationControllerDelegate {
             backgroundBlur.effect = nil
             messageTextField.delegate = self
             configureDatabase()
+            configureStorage()
             
            
         }
@@ -143,7 +144,16 @@ class FCViewController: UIViewController, UINavigationControllerDelegate {
     }
     
     func sendPhotoMessage(photoData: Data) {
-        // TODO: create method that pushes message w/ photo to the firebase database
+         let imagePath = "chat_photos/" + Auth.auth().currentUser!.uid + "/\(Double(Date.timeIntervalSinceReferenceDate * 1000)).jpg"
+              let metadata = StorageMetadata()
+              metadata.contentType = "image/jpeg"
+              storageRef!.child(imagePath).putData(photoData, metadata: metadata) { (metadata, error) in
+                  if let error = error {
+                      print("Error uploading: \(error)")
+                      return
+                  }
+                  self.sendMessage(data: [Constants.MessageFields.imageUrl: self.storageRef!.child((metadata?.path)!).description])
+              }
     }
     
     // MARK: Alert
@@ -219,13 +229,36 @@ extension FCViewController: UITableViewDelegate, UITableViewDataSource {
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         // dequeue cell
         let cell: UITableViewCell! = messagesTable.dequeueReusableCell(withIdentifier: "messageCell", for: indexPath)
-        let messageSnapshot:DataSnapshot!=messages[indexPath.row]
-        let message = messageSnapshot.value as! [String:String]
+        let messageSnapshot = messages[indexPath.row]
+        let message = messageSnapshot.value as! [String: String]
         let name = message[Constants.MessageFields.name] ?? "[username]"
-        let text = message[Constants.MessageFields.text] ?? "[message]"
-        cell.textLabel?.text=name+":"+text
-        cell.imageView?.image=self.placeholderImage
-
+        if let imageUrl = message[Constants.MessageFields.imageUrl] {
+            cell!.textLabel?.text = "sent by: \(name)"
+            if let cachedImage = imageCache.object(forKey: imageUrl as NSString) {
+                cell.imageView?.image = cachedImage
+                cell.setNeedsLayout()
+            } else {
+                Storage.storage().reference(forURL: imageUrl).getData(maxSize: INT64_MAX, completion: { (data, error) in
+                    guard error == nil else {
+                        print("Error downloading: \(error!)")
+                        return
+                    }
+                    let messageImage = UIImage.init(data: data!, scale: 50)
+                    self.imageCache.setObject(messageImage!, forKey: imageUrl as NSString as NSString)
+                    if cell == tableView.cellForRow(at: indexPath) {
+                        DispatchQueue.main.async {
+                            cell.imageView?.image = messageImage
+                            cell.setNeedsLayout()
+                        }
+                    }
+                })
+            }
+        } else {
+            // otherwise, update cell for regular message
+            let text = message[Constants.MessageFields.text] ?? "[message]"
+            cell!.textLabel?.text = name + ": " + text
+            cell!.imageView?.image = placeholderImage
+        }
         return cell!
         
     }
@@ -233,9 +266,25 @@ extension FCViewController: UITableViewDelegate, UITableViewDataSource {
     func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
         return UITableView.automaticDimension
     }
-    
-    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-            // TODO: if message contains an image, then display the image
+  func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+       
+        guard !messageTextField.isFirstResponder else { return }
+       
+        let messageSnapshot: DataSnapshot! = messages[(indexPath as NSIndexPath).row]
+        let message = messageSnapshot.value as! [String: String]
+        if let imageUrl = message[Constants.MessageFields.imageUrl] {
+            if let cachedImage = imageCache.object(forKey: imageUrl as NSString) {
+                showImageDisplay(cachedImage)
+            } else {
+                Storage.storage().reference(forURL: imageUrl).getData(maxSize: INT64_MAX, completion: { (data, error) in
+                    guard error == nil else {
+                        print("Error downloading: \(error!)")
+                        return
+                    }
+                    self.showImageDisplay(UIImage.init(data: data!)!)
+                })
+            }
+        }
     }
     
     // MARK: Show Image Display
